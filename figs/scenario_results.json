@@ -1,0 +1,49 @@
+{
+ "ex1.1_contact_events": 0,
+ "ex1.2_contact_events": 0,
+ "ex1.3_contact_events": 0,
+ "ex1.4_contact_events": 52,
+ "ex1.5_contact_events": 0,
+ "chain b=0.5_contact_events": 8766,
+ "ex2_b0.5_rmin": 1.660032546809677e-11,
+ "ex2_b0.5_rmax": 0.999999999999,
+ "ex2_b0.5_final_r_span": [
+  0.0018172135247974857,
+  0.9995919525159521
+ ],
+ "ex2_b0.5_amp_max": 0.9999999920926589,
+ "ex2_b0.5_settle_t": null,
+ "chain b=5.0_contact_events": 1301,
+ "ex2_b5.0_rmin": 1.2655249312358163e-09,
+ "ex2_b5.0_rmax": 0.999999999999,
+ "ex2_b5.0_final_r_span": [
+  0.79,
+  0.7944968063586987
+ ],
+ "ex2_b5.0_amp_max": 0.9999999987334751,
+ "ex2_b5.0_settle_t": 26.666666666666668,
+ "chain b=50.0_contact_events": 0,
+ "ex2_b50.0_rmin": 0.7,
+ "ex2_b50.0_rmax": 0.999999999999,
+ "ex2_b50.0_final_r_span": [
+  0.79,
+  0.7944934214279554
+ ],
+ "ex2_b50.0_amp_max": 0.22417380904931028,
+ "ex2_b50.0_settle_t": 2.351469668542839,
+ "ex3.1_contact_events": 23,
+ "ex3.2_contact_events": 14,
+ "ex3.3_contact_events": 4,
+ "ex4 b=0.1_contact_events": 224,
+ "ex4 b=1.0_contact_events": 18,
+ "ex4 b=10.0_contact_events": 0,
+ "fig13_3.1_C80": 0.9857425127545535,
+ "fig13_3.1_rbar80": 0.9906037176260079,
+ "fig13_3.1_R80": 0.9950806041974453,
+ "fig13_3.2_C80": 0.3546865681530792,
+ "fig13_3.2_rbar80": 0.8950349309259679,
+ "fig13_3.2_R80": 0.07437174639195476,
+ "fig13_3.3_C80": 0.43429641398090396,
+ "fig13_3.3_rbar80": 0.9124999999125244,
+ "fig13_3.3_R80": 0.257539197136703
+}

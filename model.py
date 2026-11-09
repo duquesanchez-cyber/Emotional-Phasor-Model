@@ -1,7 +1,7 @@
 """
 Core simulation module for the emotional phasor model (Eqs. 20-23 of the paper).
 
-Two integration modes:
+Three integration modes:
   - integrate_flawed():   naive implementation in which the clip of r to [0,1]
                           is applied to the RHS evaluation only; retained for
                           auditability. Under strong coupling it produces
@@ -44,7 +44,15 @@ EMO = {
 # ------------------------------------------------------------------ dynamics
 def rhs_factory(K_of_t, b_r, b_theta, r_star, th_star, clip_in_rhs=False,
                 first_order_theta=False):
-    """Vectorized RHS. K_of_t(t) -> (K_r, K_theta), both fresh arrays."""
+    """Vectorized RHS. K_of_t(t) -> (K_r, K_theta), both fresh arrays.
+
+    first_order_theta:
+      False      -> second-order (inertial) angular subsystem (Eq. 11)
+      "matched"  -> matched first-order baseline b_theta*dtheta/dt = f
+                    (inertia removed, damping retained; Fig. 6b)
+      True/"unit"-> unit-rate first-order baseline dtheta/dt = f
+                    (previous version's comparison; Fig. 6c)
+    """
     def rhs(t, y):
         r = y[:N]; v = y[N:2*N]; th = y[2*N:3*N]; om = y[3*N:]
         if clip_in_rhs:                      # original flawed behaviour
@@ -59,7 +67,11 @@ def rhs_factory(K_of_t, b_r, b_theta, r_star, th_star, clip_in_rhs=False,
         drdt = v
         dvdt = -(r - r_star) - b_r * v + coup_r
         if first_order_theta:
-            dthdt = -np.sin(th - th_star) + coup_th
+            f_th = -np.sin(th - th_star) + coup_th
+            if first_order_theta == "matched":
+                dthdt = f_th / b_theta
+            else:                              # True / "unit": previous baseline
+                dthdt = f_th
             domdt = np.zeros(N)
         else:
             dthdt = om
@@ -103,6 +115,178 @@ def integrate_projected(K_of_t, b, r0=None, th0=None, r_star=None, th_star=None,
         r[lo] = 0.0; r[hi] = 1.0
         v[lo & (v < 0)] = 0.0; v[hi & (v > 0)] = 0.0
         out[:, k+1] = y
+    return t_eval, out[:N], wrap(out[2*N:3*N])
+
+def integrate_contact(K_of_t, b, r0=None, th0=None, r_star=None, th_star=None,
+                      method="RK45", rtol=RTOL, atol=ATOL, t_eval=T_EVAL,
+                      first_order_theta=False, max_events=200000,
+                      return_events=False):
+    """Continuous inelastic ("sticking") contact law for r in [0,1] (Eq. 14).
+
+    Hybrid, event-located integration:
+      * each agent carries a contact state in {0: free, +1: stuck at r=1,
+        -1: stuck at r=0}; stuck agents have dr/dt = dv/dt = 0 (v held at 0);
+      * a free agent whose radius crosses a bound with outward velocity sticks
+        there at the event-located contact time, with its radial velocity set
+        to zero at the instant of contact;
+      * a stuck agent is released, with continuous position and velocity, as
+        soon as its unconstrained radial acceleration points inward; releases
+        are processed instantly (before integrating) and the radius is nudged
+        1e-12 inside the bound so the contact event cannot re-fire spuriously
+        at the restart point;
+      * agents that start on a bound with outward acceleration are stuck at
+        t = 0.
+    The angular subsystem is untouched.
+    """
+    r0 = R0 if r0 is None else r0; th0 = TH0 if th0 is None else th0
+    r_star = r0.copy() if r_star is None else r_star
+    th_star = th0.copy() if th_star is None else th_star
+    b_r = np.full(N, b); b_th = np.full(N, b)
+    base = rhs_factory(K_of_t, b_r, b_th, r_star, th_star, clip_in_rhs=False,
+                       first_order_theta=first_order_theta)
+    EPS = 1e-12
+    stuck = np.zeros(N, dtype=int)
+
+    def accel(t, y):
+        yy = y.copy()
+        yy[:N][stuck == 1] = 1.0
+        yy[:N][stuck == -1] = 0.0
+        yy[N:2*N][stuck != 0] = 0.0
+        return base(t, yy)[N:2*N]
+
+    REL = 5e-14      # release threshold: just past the event offset 1e-13,
+                     # so a stuck agent whose (serialized) twin event already
+                     # fired is released here; well above root-finding noise.
+
+    def settle(t, y):
+        """Reconcile the contact states at time t.
+
+        Simultaneous identical events are serialized by the solver (only the
+        first terminal root is returned), so after each event batch this
+        sweep (i) releases every stuck agent whose unconstrained acceleration
+        already points inward past the event threshold, and (ii) sticks every
+        free agent left on or beyond a bound with an outward push -- the
+        mirror case for serialized simultaneous hits. Repeats until stable.
+        """
+        changed = True
+        while changed:
+            changed = False
+            a = accel(t, y)
+            for i in range(N):
+                if stuck[i] == 1 and a[i] < -REL:
+                    stuck[i] = 0; y[i] = 1.0 - EPS; y[N+i] = 0.0; changed = True
+                elif stuck[i] == -1 and a[i] > REL:
+                    stuck[i] = 0; y[i] = EPS; y[N+i] = 0.0; changed = True
+                elif stuck[i] == 0 and y[i] >= 1.0:
+                    y[i] = 1.0
+                    if y[N+i] > 0.0 or (y[N+i] == 0.0 and a[i] >= 0.0):
+                        stuck[i] = 1; y[N+i] = 0.0; changed = True
+                    else:
+                        # nudging a free boundary agent inward changes the
+                        # unconstrained acceleration of its stuck neighbours
+                        # (the release-event function is evaluated at the
+                        # nudged state), so the sweep must run again with
+                        # the acceleration recomputed; otherwise a release
+                        # event can be born already past its root and never
+                        # fire (the solver only detects sign CHANGES).
+                        y[i] = 1.0 - EPS; changed = True
+                elif stuck[i] == 0 and y[i] <= 0.0:
+                    y[i] = 0.0
+                    if y[N+i] < 0.0 or (y[N+i] == 0.0 and a[i] <= 0.0):
+                        stuck[i] = -1; y[N+i] = 0.0; changed = True
+                    else:
+                        y[i] = EPS; changed = True  # see upper-bound note
+        return y
+
+    def rhs(t, y):
+        d = base(t, y)
+        m = stuck != 0
+        if m.any():
+            d[:N][m] = 0.0
+            d[N:2*N][m] = 0.0
+        return d
+
+    def make_events():
+        evs, owners = [], []
+        for i in range(N):
+            if stuck[i] == 0:
+                def hit_hi(t, y, i=i): return y[i] - 1.0
+                hit_hi.terminal = True; hit_hi.direction = +1.0
+                def hit_lo(t, y, i=i): return y[i]
+                hit_lo.terminal = True; hit_lo.direction = -1.0
+                evs += [hit_hi, hit_lo]; owners += [(i, +1), (i, -1)]
+            else:
+                sgn = float(stuck[i])
+                # +1e-13 offset: a frozen agent whose unconstrained
+                # acceleration is identically zero (grazing equilibrium)
+                # keeps g > 0 and cannot trigger spurious roots; a genuine
+                # inward crossing fires at accel = -1e-13, a negligible
+                # shift of the release time.
+                def release(t, y, i=i, sgn=sgn):
+                    return sgn * accel(t, y)[i] + 1e-13
+                release.terminal = True; release.direction = -1.0
+                evs.append(release); owners.append((i, 0))
+        return evs, owners
+
+    t0f, tf = float(t_eval[0]), float(t_eval[-1])
+    y = np.concatenate([r0, np.zeros(N), th0, np.zeros(N)])
+    a0 = base(t0f, y)[N:2*N]
+    for i in range(N):
+        # >= / <= 0 inclusive: an agent resting on a bound exactly at its
+        # attractor (zero acceleration) is held there, which freezes its
+        # state exactly and prevents spurious event roots from floating-
+        # point noise in g = r - 1 (degenerate grazing equilibrium).
+        if y[i] >= 1.0 - 1e-15 and a0[i] >= 0.0:
+            stuck[i] = 1; y[i] = 1.0; y[N+i] = 0.0
+        elif y[i] <= 1e-15 and a0[i] <= 0.0:
+            stuck[i] = -1; y[i] = 0.0; y[N+i] = 0.0
+    y = settle(t0f, y)
+
+    t_now = t0f
+    out = np.empty((4*N, len(t_eval)))
+    out[:, 0] = y
+    filled = 1
+    n_events = 0
+    while t_now < tf - 1e-10:
+        evs, owners = make_events()
+        want = t_eval[t_eval > t_now + 1e-12]
+        sol = solve_ivp(rhs, (t_now, tf), y, method=method,
+                        rtol=rtol, atol=atol, events=evs,
+                        t_eval=want if len(want) else None)
+        k = sol.y.shape[1] if len(sol.t) else 0
+        if k:
+            out[:, filled:filled + k] = sol.y
+            filled += k
+        if sol.status == 1:
+            times = [(te[0], j) for j, te in enumerate(sol.t_events) if len(te)]
+            t_ev = min(t for t, _ in times)
+            j0 = [j for t, j in times if t <= t_ev + 1e-12]
+            y = sol.y_events[j0[0]][0].copy()
+            for j in j0:
+                i, kind = owners[j]
+                if kind == +1 and stuck[i] == 0:
+                    stuck[i] = 1; y[i] = 1.0; y[N+i] = 0.0; n_events += 1
+                elif kind == -1 and stuck[i] == 0:
+                    stuck[i] = -1; y[i] = 0.0; y[N+i] = 0.0; n_events += 1
+                elif kind == 0 and stuck[i] != 0:
+                    # the event root certifies the inward crossing: release
+                    # here directly. At a coupling discontinuity the dense-
+                    # output root can land a hair BEFORE the jump, where the
+                    # true acceleration is still zero, so the settle() sweep
+                    # alone would refuse the release and the same event
+                    # would re-fire forever.
+                    sgn = stuck[i]
+                    stuck[i] = 0
+                    y[i] = (1.0 - EPS) if sgn == 1 else EPS
+                    y[N+i] = 0.0
+            y = settle(t_ev, y)
+            t_now = t_ev
+            if n_events > max_events:
+                raise RuntimeError("contact-event budget exceeded")
+        else:
+            t_now = tf
+    if return_events:
+        return t_eval, out[:N], wrap(out[2*N:3*N]), n_events
     return t_eval, out[:N], wrap(out[2*N:3*N])
 
 def wrap(th):

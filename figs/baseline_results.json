@@ -1,0 +1,14 @@
+{
+ "inertial": {
+  "overshoot_rad": 2.018804435658642,
+  "late_amplitude_rad": 1.4123740955189028
+ },
+ "matched first order": {
+  "overshoot_rad": 0.0,
+  "late_amplitude_rad": 4.899646413036862e-07
+ },
+ "unit-rate first order": {
+  "overshoot_rad": 0.0,
+  "late_amplitude_rad": 1.1868420024541138e-08
+ }
+}
